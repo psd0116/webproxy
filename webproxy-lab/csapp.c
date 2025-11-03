@@ -1023,8 +1023,8 @@ int open_listenfd(char *port)
         if (bind(listenfd, p->ai_addr, p->ai_addrlen) == 0)
             break; /* Success */
         if (close(listenfd) < 0) { /* Bind failed, try the next */
-            fprintf(stderr, "open_listenfd close failed: %s\n", strerror(errno));
-            return -1;
+            fprintf(stderr, "open_listenfd close failed: %s\n", strerror(rrno));
+            return -1;e
         }
     }
 
