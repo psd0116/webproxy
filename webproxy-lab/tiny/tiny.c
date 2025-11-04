@@ -52,6 +52,7 @@ void read_requesthdrs(rio_t *rp)
   // 1. 첫번째 헤더 라인을 읽는다.
   // (예: "Host: localhost:8080\r\n")
   Rio_readlineb(rp, buf, MAXLINE);
+  printf("%s", buf); // [11.6A 수정] 첫 번째 헤더도 출력
 
   // 2. 방금 읽은 줄(buf)이 헤더의 끝을 알리는 빈 줄인지 검사한다.
   while (strcmp(buf, "\r\n"))
@@ -109,26 +110,50 @@ int parse_uri(char *uri, char *filename, char *cgiargs)
   }
 }
 
-// get_filetype 함수
-void get_filetype(char *filename, char *filetype)
+// // get_filetype 함수 -> 사진
+// void get_filetype(char *filename, char *filetype)
+// {
+//     // 1. filename 문자열에 ".html"이 포함되어 있는지 검사합니다.
+//     if (strstr(filename, ".html"))
+//         // 2. 만약 ".html"이 있다면, filetype 버퍼에 "text/html"을 복사합니다.
+//         strcpy(filetype, "text/html");
+//     // 3. ".html"이 없다면, ".gif"가 있는지 검사합니다.
+//     else if (strstr(filename, ".gif"))
+//         strcpy(filetype, "image/gif");
+//     // 4. (..PNG, JPG에 대해 반복..)
+//     else if (strstr(filename, ".png"))
+//         strcpy(filetype, "image/png");
+//     else if (strstr(filename, ".jpg"))
+//         strcpy(filetype, "image/jpeg");
+//     // 5. 위 4가지 확장자에 모두 해당하지 않으면, 
+//     //    기본값으로 "text/plain" (일반 텍스트)을 사용합니다.
+//     else
+//         strcpy(filetype, "text/plain");
+// }
+// get_filetype 함수 -> 동영상
+void get_filetype(char *filename, char *filetype) 
 {
-    // 1. filename 문자열에 ".html"이 포함되어 있는지 검사합니다.
     if (strstr(filename, ".html"))
-        // 2. 만약 ".html"이 있다면, filetype 버퍼에 "text/html"을 복사합니다.
         strcpy(filetype, "text/html");
-    // 3. ".html"이 없다면, ".gif"가 있는지 검사합니다.
     else if (strstr(filename, ".gif"))
-        strcpy(filetype, "image/gif");
-    // 4. (..PNG, JPG에 대해 반복..)
+        strcpy(filetype, "image/gif"); // gif 추가
     else if (strstr(filename, ".png"))
         strcpy(filetype, "image/png");
-    else if (strstr(filename, ".jpg"))
+    else if (strstr(filename, ".jpg") || strstr(filename, ".jpeg")) // jpg/jpeg 통합
         strcpy(filetype, "image/jpeg");
-    // 5. 위 4가지 확장자에 모두 해당하지 않으면, 
-    //    기본값으로 "text/plain" (일반 텍스트)을 사용합니다.
+        
+    /* --- 11.7 문제의 핵심 --- */
+    else if (strstr(filename, ".mpg") || strstr(filename, ".mpeg"))
+        strcpy(filetype, "video/mpeg");
+    else if (strstr(filename, ".mp4"))
+        strcpy(filetype, "video/mp4");
+    /* ---------------------- */
+    
     else
         strcpy(filetype, "text/plain");
 }
+
+
 
 // serve_static 함수의 핵심 역할은 클라이언트가 요청한 정적 파일을 찾아서 HTTP 응답으로 보내주는 것.
 // int fd -> 클라이언트(브라우저)와 연결된 소켓(통신 파이프)의 번호
