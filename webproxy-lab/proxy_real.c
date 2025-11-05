@@ -26,10 +26,12 @@ int main(int argc, char** argv)
     // 커널에 등록해야 다른 시스템과 통신할 수 있는 상태가 된다.
     // sockaddr_in 구조체 사용
     // 서버 주소 구조체 설정 OS에 포트 정보를 알려주기 위함
+    int port = atoi(argv[1]);
+    
     struct sockaddr_in server_addr;
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(8000); // 사용할 포트 번호는 8000
+    server_addr.sin_port = htons(port); // 사용할 포트 번호는 8000
     server_addr.sin_addr.s_addr = htonl(INADDR_ANY); // 주소를 지정해 주는 것으로 아무 주소나 다 받겠다 선언
 
     if ((bind(listenfd, (struct sockaddr*) &server_addr, sizeof(server_addr)) < 0))
@@ -73,14 +75,14 @@ int main(int argc, char** argv)
 // 클라이언트의 HTTP 요청을 읽고 파싱한다! + 서버에 중계
 void request_parse(int clientfd)
 {
-    rio_t rio; // RIO 버퍼 구조체
+    rio_t rio_client; // RIO 버퍼 구조체
     char buf[MAXLINE], method[MAXLINE], uri[MAXLINE], version[MAXLINE];
     char hostname[MAXLINE], port[MAXLINE], path[MAXLINE];
     // RIO 버퍼를 초기화 하자 ->clientfd와 rio 버퍼 연결
-    Rio_readinitb(&rio, clientfd);
+    Rio_readinitb(&rio_client, clientfd);
     
     // 요청 첫째줄 읽기
-    if (Rio_readlineb(&rio, buf, MAXLINE) <= 0)
+    if (Rio_readlineb(&rio_client, buf, MAXLINE) <= 0)
     {
         // 읽을 것이 없거나 오류가 발생한 경우 함수 종료
         return;
@@ -93,23 +95,49 @@ void request_parse(int clientfd)
         return;
     }
 
+    // Uri 파싱 함수를 호출해서 hostname, port, path를 채운다.
+    if (parse_uri(uri, hostname, port, path) < 0)
+    {
+        fprintf(stderr, "파싱 실패 : %s\n", uri);
+        return;
+    }
+
+    // 파싱한 hosrname과 port로 리얼 서버에 연결
+    int serverfd; // 서버와 연결될 소켓
+    rio_t rio_server; // 서버와 연결될 RIO 버퍼
+    
+    if ((serverfd = Open_clientfd(hostname, port)) < 0)
+    {
+        fprintf(stderr, "서버 연결 실패 : %s :%s\n", hostname, port);
+        return; // 서버 연결 실패 시 함수 종료
+    }
+    
+    Rio_readinitb(&rio_server, serverfd);
+
+    // 서버로 보낼 새로운 HTTP 요청 라인 생성
+    char new_request_line[MAXLINE];
+    // 서버에게 HTTP/1.0으로 요청
+    sprintf(new_request_line, "%s %s HTTP/1.0\r\n", method, path);
+
+    Rio_writen(serverfd, new_request_line, strlen(new_request_line));
+    
+    // 클라이언트의 헤더를 읽으면서 즉시 서버로 전달
     int n;
-    while ((n = Rio_readlineb(&rio, buf, MAXLINE)) > 0)
+    while ((n = Rio_readlineb(&rio_client, buf, MAXLINE)) > 0)
     {
         // \r\n을 만나면 헤더 끝
         if (strcmp(buf, "\r\n") == 0)
         {
             break;
         }
-        // Host 헤더는 따로 저장
-        if (strstr(buf, "Host"))
+        
+        // 우리가 직접 만들어서 보낼 것이므로 클라이언트가 보낸것은 무시
+        if (strstr(buf, "Host:") || strstr(buf, "Connection:") || strstr(buf, "Proxy-Connection:"))
         {
-            printf("찾음 : %s", buf);
-        } else {
-            printf("기타 : %s", buf);
+            continue;
         }
-        // 읽은 헤더들을 진짜 서버로 보내기 위해 저장
-        // Connection, Proxt-connection, User-Agent 헤더는 처리해야할 경우가 많다.
+        // 읽은 헤더를 서버로 전송
+        Rio_writen(serverfd, buf, n);
     }
 
     if (n < 0)
@@ -117,7 +145,24 @@ void request_parse(int clientfd)
         fprintf(stderr, "헤더 못 읽어요\n");
         return;
     }
+    // 프록시가 서버로 보낼 필수 헤더를 만들어서 전송
+    char new_headers[MAXLINE];
+    sprintf(new_headers, "Host: %s\r\n", hostname);
+    Rio_writen(serverfd, new_headers, strlen(new_headers));
+    Rio_writen(serverfd, "Connection: close\r\n", 19);
+    Rio_writen(serverfd, "Proxy-Connection: close\r\n", 25);
+    Rio_writen(serverfd, "\r\n", 2); // 헤더의 끝 (빈 줄)
+
+    // ----- 클라이언트 -> 프록시 -> 서버 -------------
+
+    // ----- 서버 -> 프록시 -> 클라이언트 -------------
+    while ((n = Rio_readnb(&rio_server, buf, MAXLINE)) > 0)
+    {
+        Rio_writen(clientfd, buf, n);
+    }
+    close(serverfd);
 }
+
 
 int parse_uri(char *uri, char *hostname, char* port, char* path)
 {
