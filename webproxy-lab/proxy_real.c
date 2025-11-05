@@ -1,8 +1,10 @@
 #include <stdio.h>
 #include "csapp.h"
+#include <pthread.h>
 
 void request_parse(int fd);
 int parse_uri(char *uri, char *hostname, char *port, char *path);
+void* thread_main(void* vargp);
 
 int main(int argc, char** argv)
 {
@@ -31,7 +33,7 @@ int main(int argc, char** argv)
     struct sockaddr_in server_addr;
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(port); // 사용할 포트 번호는 8000
+    server_addr.sin_port = htons(port); // 사용할 포트 번호는 8000으로 할라 했는데 
     server_addr.sin_addr.s_addr = htonl(INADDR_ANY); // 주소를 지정해 주는 것으로 아무 주소나 다 받겠다 선언
 
     if ((bind(listenfd, (struct sockaddr*) &server_addr, sizeof(server_addr)) < 0))
@@ -50,25 +52,35 @@ int main(int argc, char** argv)
         exit(1);
     }
 
+    pthread_t tid; // 스레드 ID를 저장할 변수
+
     // 클라이언트 연결 수락을 위한 무한 루프
     while(1)
     {
-        int clientfd; // 클라인언트와 실제 통신할 소켓
+        int *clientfd_ptr; // 클라인언트와 실제 통신할 소켓 (수정) clientfd를 스레드에 안전하게 넘기기 위해 포인터 사용
         struct sockaddr_in client_addr; // 연결될 클라이언트의 주소 정보
         socklen_t client_len = sizeof(client_addr);
 
+        // (수정) clientfd를 저장할 메모리를 힙에 할당한다.
+        // while 루프의 지역 변수를 넘기면, 다음 루츠에서 덮어써져서 위험하므로 포인터 사용
+        clientfd_ptr = Malloc(sizeof(int));
+
         // accept -> 클라이언트 연결 요철리 올 때까지 대기
         // 연결이 되면, 클라이언트와 통신할 수 있는 새로운 소켓(clientfd)를 반환
-        clientfd = accept(listenfd, (struct sockaddr*) &client_addr, &client_len);
+        *clientfd_ptr = accept(listenfd, (struct sockaddr*) &client_addr, &client_len);
 
-        if (clientfd < 0)
+        if (clientfd_ptr < 0)
         {
             printf("accept 실패!");
             continue;
         }
-        // accept로 받은 clientfd 파싱
-        request_parse(clientfd);
-        close(clientfd);
+        // // accept로 받은 clientfd 파싱
+        // request_parse(clientfd);
+        // close(clientfd);
+        
+        // request_parse를 직접 호출하는 대신, 새 스레드를 생성
+        // thread_main 함수가 clientfd_ptr을 인자로 받아 실행된다.
+        Pthread_create(&tid, NULL, thread_main, clientfd_ptr);
     }
 }
 
@@ -199,4 +211,25 @@ int parse_uri(char *uri, char *hostname, char* port, char* path)
     }
     
     return 0;
+}
+
+void* thread_main(void* vargp)
+{
+  // main에서 넘겨받은 포인터에서 clientfd 값을 복사한다.
+  int clientfd = *((int *)vargp);
+  
+  // 이 스레드는 main 스레드와 분리되어 독립적으로 실행된다.
+  // 스레드가 종료되면 OS가 자원을 자동으로 회수
+  Pthread_detach(pthread_self());
+
+  // main이 Malloc으로 할당한 메모리를 해제 (값은 복사했으니 OK)
+  Free(vargp);
+
+  // 스레드가 이 클라이언트의 모든 처리를 담당
+  request_parse(clientfd);
+
+  // 작업이 끝났으므로 스레드가 소켓을 닫는다.
+  close(clientfd);
+
+  return NULL;
 }
