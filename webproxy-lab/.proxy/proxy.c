@@ -14,8 +14,7 @@ int parse_uri(char *uri, char *filename, char *cgiargs);
 void serve_static(int fd, char *filename, int filesize); // 내가 하기
 void get_filetype(char *filename, char *filetype);
 void serve_dynamic(int fd, char *filename, char *cgiargs);
-void clienterror(int fd, char *cause, char *errnum, char *shortmsg,
-                 char *longmsg);
+void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longmsg);
 
 int main(int argc, char **argv)
 {
@@ -74,7 +73,7 @@ int parse_uri(char *uri, char *filename, char *cgiargs)
   
   // uri 문자열에 cgi-bin이 포함되어 있지 않으면 정적 컨텐츠로 간주한다.
   if (!strstr(uri, "cgi-bin"))
-  { 
+  {
     // cgiargs 버퍼를 빈 문자열로 설정한다.
     strcpy(cgiargs, "");
     
@@ -289,62 +288,68 @@ void serve_dynamic(int fd, char *filename, char *cgiargs)
     Wait(NULL);  /* Parent waits for and reaps child */
 }
 
-void doit(int fd)
+void proxy_doit(int client_fd)
 {
-    int is_static;
-    struct stat sbuf;
-    char buf[MAXLINE], method[MAXLINE], uri[MAXLINE], version[MAXLINE];
-    char filename[MAXLINE], cgiargs[MAXLINE];
-    rio_t rio;
+  rio_t rio_client;
+  char buf[MAXLINE], method[MAXLINE], uri[MAXLINE], version[MAXLINE];
+  char request_buf[MAXLINE]; // 엔드 서보로 보낼 요청을 재조립할 버퍼
 
-    /* -------------------- Read request line and headers -------------------- */
-    Rio_readinitb(&rio, fd);
-    Rio_readlineb(&rio, buf, MAXLINE);
-    printf("Request headers:\n%s", buf);
+  char hostname[MAXLINE], port[MAXLINE], path[MAXLINE];
+  int end_server_fd; // 엔드 서버(tiny.c)와 연결된 소켓
 
-    sscanf(buf, "%s %s %s", method, uri, version);
+  // 클라이언트의 요청 읽기
+  
+  Rio_readinitb(&rio_client, client_fd);
 
-    /* Only GET method is implemented */
-    if (strcasecmp(method, "GET")) { // head 메소드도 허용하도록 허용
-        clienterror(fd, method, "501", "Not implemented",
-                    "Tiny does not implement this method");
-        return;
-    }
+  // Request Line 읽기
+  if (Rio_readlineb(&rio_client, buf, MAXLINE) == 0) return;
 
-    read_requesthdrs(&rio);
+  sscanf(buf, "%s %s %s", method, uri, version);
 
-    /* -------------------- Parse URI from GET request ----------------------- */
-    is_static = parse_uri(uri, filename, cgiargs);
+  // tiny.c 의 read_requesthdrs는 헤더를 읽고 버렸다.
+  // 프록시 서버는 이 헤더를 반드시 알아야 한다.
+  parse_host_header(&rio_client, hostname, port, request_buf);
 
-    if (stat(filename, &sbuf) < 0) {
-        clienterror(fd, filename, "404", "Not found",
-                    "Tiny couldn’t find this file");
-        return;
-    }
+  // uri에서 실제 경로 파싱
+  // 원본 uri에서 실제 경로를 추출해야 한다.
+  // 실제 경로를 추출해야 한다.
+  parse_path(uri, path);
 
-    /* -------------------- Serve static or dynamic content ------------------ */
-    if (is_static) {
-        /* Check read permission */
-        if (!S_ISREG(sbuf.st_mode) || !(S_IRUSR & sbuf.st_mode)) {
-            clienterror(fd, filename, "403", "Forbidden",
-                        "Tiny couldn’t read the file");
-            return;
-        }
+  // 엔드 서버에 연결
+  end_server_fd = Open_clientfd(hostname, port);
 
-        serve_static(fd, filename, sbuf.st_size);
-    } 
-    else {
-        /* Check execute permission */
-        if (!S_ISREG(sbuf.st_mode) || !(S_IXUSR & sbuf.st_mode)) {
-            clienterror(fd, filename, "403", "Forbidden",
-                        "Tiny couldn’t run the CGI program");
-            return;
-        }
+  // 연결 안됨
+  if (end_server_fd < 0)
+  {
+    printf("Connection to end server failed\n");
+    return;
+  }
 
-        serve_dynamic(fd, filename, cgiargs);
-    }
+  // 엔드 서버로 요청 중계
+
+  // 프록시 가 엔드 서버에게 보낼 요청 라인 새로 만들기
+  sprintf(buf, "%s %s HTTP/1.0\r\n", method, path);
+  Rio_writen(end_server_fd, buf, strlen(buf));
+  
+  //
+  Rio_writen(end_server_fd, request_buf, strlen(request_buf));
+
+  // 엔드 서버의 응답을 클라이언트로 중계
+
+  rio_t rio_server;
+  ssize_t n;
+
+  Rio_readinitb(&rio_server, end_server_fd);
+
+  // 엔드 서버로부터 응답을 읽어서
+  while ((n = Rioreadnb(&rio_server, buf, MAXLINE)) > 0)
+  {
+    Rio_writen(client_fd, buf, n);
+  }
+
+  Close(end_server_fd);
 }
-
+    
 void clienterror(int fd, char *cause, char *errnum,
                  char *shortmsg, char *longmsg)
 {
